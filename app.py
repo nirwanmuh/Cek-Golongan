@@ -1,17 +1,18 @@
 import streamlit as st
 from ultralytics import YOLO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import numpy as np
+import pandas as pd
 
 st.set_page_config(page_title="Deteksi Golongan Kendaraan", layout="wide")
 
 st.title("🚗 Deteksi Golongan Kendaraan")
-st.write("Ambil gambar kendaraan menggunakan kamera, lalu model akan mendeteksi jenisnya dengan bounding box warna per kelas.")
+st.write("Ambil gambar kendaraan menggunakan kamera, lalu sistem akan mendeteksi jenis & golongannya, lengkap dengan bounding box berwarna.")
 
-# Load YOLO
+# Load model YOLO
 model = YOLO("models/yolov8n.pt")
 
-# Warna per kelas
+# Warna untuk setiap kelas
 CLASS_COLORS = {
     "car": "red",
     "motorbike": "blue",
@@ -29,20 +30,22 @@ def classify_vehicle(label):
         return "Golongan 3"
     return "Tidak diketahui"
 
-# Ambil gambar
+# Ambil gambar dari kamera
 img_data = st.camera_input("Ambil foto kendaraan")
 
 if img_data:
+    # Load image
     img = Image.open(img_data).convert("RGB")
     img_np = np.array(img)
 
-    # Inference
+    # Inference YOLO
     results = model(img_np)[0]
 
-    # Siapkan draw
+    # Untuk bounding box
     draw = ImageDraw.Draw(img)
 
-    detected = []
+    # List hasil deteksi
+    detected_rows = []
 
     for box in results.boxes:
         cls_id = int(box.cls[0])
@@ -50,33 +53,43 @@ if img_data:
         conf = float(box.conf[0])
         gol = classify_vehicle(label)
 
-        detected.append({
-            "kendaraan": label,
-            "golongan": gol,
-            "confidence": round(conf, 3)
+        # Buat row untuk tabel
+        detected_rows.append({
+            "Kendaraan": label,
+            "Golongan": gol,
+            "Confidence": round(conf, 3)
         })
 
-        # Koordinat bounding box
+        # Ambil koordinat
         x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-        # Pilih warna
+        # Warna bounding box
         color = CLASS_COLORS.get(label, "white")
 
-        # Gambar bounding box (lebih rapi, tebal)
+        # Kotak
         draw.rectangle([x1, y1, x2, y2], outline=color, width=5)
 
-        # Label text: "label (conf)"
+        # Label + confidence
         text_label = f"{label} ({conf:.2f})"
-
-        # Background text
         text_width = draw.textlength(text_label)
         text_height = 20
 
         draw.rectangle([x1, y1 - text_height, x1 + text_width + 6, y1], fill=color)
         draw.text((x1 + 3, y1 - text_height + 2), text_label, fill="black")
 
-    st.subheader("Hasil Deteksi:")
-    st.json(detected)
+    # ==========================
+    #   Tampilkan Tabel Hasil
+    # ==========================
+    st.subheader("📊 Hasil Deteksi:")
+    
+    if len(detected_rows) > 0:
+        df = pd.DataFrame(detected_rows)
+        st.table(df)
+    else:
+        st.info("Tidak ada kendaraan terdeteksi.")
 
-    st.subheader("Gambar yang Diambil + Bounding Box:")
+    # ==========================
+    #   Tampilkan Gambar
+    # ==========================
+    st.subheader("📸 Gambar yang Diambil + Bounding Box:")
     st.image(img, use_column_width=True)
