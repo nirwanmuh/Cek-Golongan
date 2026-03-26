@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import pandas as pd
 import io
+import base64
 
 # Import aturan golongan
 from golongan_rules import GOLONGAN_RULES
@@ -11,14 +12,14 @@ from golongan_rules import GOLONGAN_RULES
 st.set_page_config(page_title="Deteksi Golongan Kendaraan I–XII", layout="wide")
 
 st.title("🚗 Deteksi Golongan Kendaraan I–XII")
-st.write("Sistem mendeteksi kendaraan, mengklasifikasi golongan, dan menampilkan crop tiap objek.")
+st.write("Sistem mendeteksi kendaraan dari kamera atau upload foto, menentukan golongan, dan menampilkan crop tiap kendaraan.")
 
 # ===============================
 #  Load YOLO
 # ===============================
 model = YOLO("models/yolov8n.pt")
 
-# Warna berdasarkan kelas YOLO
+# Warna per kelas YOLO
 CLASS_COLORS = {
     "car": "red",
     "motorbike": "blue",
@@ -56,13 +57,31 @@ def classify_vehicle(label, size):
                 return rule["golongan"]
     return "Tidak diketahui"
 
-# ===============================
-#  Start capture
-# ===============================
-img_data = st.camera_input("Ambil foto kendaraan")
+# =====================================================
+# INPUT: Kamera ATAU Upload Foto
+# =====================================================
+
+col1, col2 = st.columns(2)
+
+with col1:
+    img_data = st.camera_input("Ambil foto kendaraan")
+
+with col2:
+    uploaded_file = st.file_uploader("Atau upload foto kendaraan", type=["jpg", "jpeg", "png"])
+
+# Tentukan gambar mana yang dipakai
+image_source = None
 
 if img_data:
-    img = Image.open(img_data).convert("RGB")
+    image_source = img_data
+elif uploaded_file:
+    image_source = uploaded_file
+
+# =====================================================
+# Proses gambar jika ada input
+# =====================================================
+if image_source:
+    img = Image.open(image_source).convert("RGB")
     img_np = np.array(img)
     frame_w = img_np.shape[1]
 
@@ -72,7 +91,6 @@ if img_data:
     detected_rows = []
 
     for box in results.boxes:
-        # Extract YOLO box data
         cls_id = int(box.cls[0])
         label = model.model.names[cls_id]
         conf = float(box.conf[0])
@@ -80,65 +98,55 @@ if img_data:
         xyxy = box.xyxy[0].tolist()
         x1, y1, x2, y2 = xyxy
 
-        # Determine size & golongan
+        # Tentukan ukuran + golongan
         size = estimate_size(xyxy, frame_w)
-        gol = classify_vehicle(label, size)
+        golongan = classify_vehicle(label, size)
 
-        # -------------------------
-        # CROP IMAGE
-        # -------------------------
+        # ---------------------
+        #  CROP KENDARAAN
+        # ---------------------
         cropped = img.crop((x1, y1, x2, y2))
 
-        # Convert crop ke PNG untuk display di DataFrame
+        # Convert crop to PNG for HTML
         buf = io.BytesIO()
         cropped.save(buf, format="PNG")
-        buf.seek(0)
+        encoded = base64.b64encode(buf.getvalue()).decode()
 
-        # Row untuk tabel
+        # Masukkan ke tabel
         detected_rows.append({
-            "Gambar Kendaraan": buf,
+            "Gambar Kendaraan": f'<img src="data:image/png;base64,{encoded}" width="120">',
             "Kendaraan": label,
-            "Golongan": gol,
+            "Golongan": golongan,
             "Confidence": round(conf, 3),
         })
 
-        # -------------------------
-        # BOUNDING BOX DRAWING
-        # -------------------------
+        # ---------------------
+        #  Gambar bounding box
+        # ---------------------
         color = CLASS_COLORS.get(label, "white")
 
         draw.rectangle([x1, y1, x2, y2], outline=color, width=5)
 
-        text_label = f"{label} · {gol} · {conf:.2f}"
-        tw = draw.textlength(text_label)
+        text = f"{label} · {golongan} · {conf:.2f}"
+        tw = draw.textlength(text)
         th = 22
 
         draw.rectangle([x1, y1 - th, x1 + tw + 6, y1], fill=color)
-        draw.text((x1 + 3, y1 - th + 2), text_label, fill="black")
+        draw.text((x1 + 3, y1 - th + 2), text, fill="black")
 
-    # ===============================
-    #  Display Results Table
-    # ===============================
-    st.subheader("📊 Hasil Deteksi:")
+    # =========================
+    # TABEL HASIL DETEKSI
+    # =========================
+    st.subheader("📊 Hasil Deteksi")
 
     if len(detected_rows) > 0:
-        # Convert rows menjadi DataFrame yang bisa menampilkan gambar
         df = pd.DataFrame(detected_rows)
-
-        # Render gambar di tabel
-        def image_formatter(img_bytes):
-            return f'<img src="data:image/png;base64,{base64.b64encode(img_bytes.getvalue()).decode()}" width="120"/>'
-
-        import base64
-        st.write(
-            df.to_html(escape=False, formatters={"Gambar Kendaraan": image_formatter}),
-            unsafe_allow_html=True
-        )
+        st.write(df.to_html(escape=False), unsafe_allow_html=True)
     else:
         st.info("Tidak ada kendaraan terdeteksi.")
 
-    # ===============================
-    #  Display annotated image
-    # ===============================
-    st.subheader("📸 Gambar dengan Bounding Box:")
+    # =========================
+    # GAMBAR BOUNDING BOX
+    # =========================
+    st.subheader("📸 Gambar Dengan Bounding Box:")
     st.image(img, use_column_width=True)
