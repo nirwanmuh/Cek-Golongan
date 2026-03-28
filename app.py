@@ -11,29 +11,17 @@ import io
 
 from golongan_rules import GOLONGAN_RULES
 
-# =====================================================
-# PAGE CONFIG
-# =====================================================
+# ================= PAGE CONFIG =================
 st.set_page_config(
     page_title="Deteksi Golongan Kendaraan I–XII",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# =====================================================
-# CUSTOM CSS (FULLSCREEN & RESPONSIVE CAMERA)
-# =====================================================
+# ================= CSS =================
 st.markdown("""
 <style>
-.block-container {
-    padding-left: 0.8rem;
-    padding-right: 0.8rem;
-}
-
-div[data-testid="stCameraInput"],
-div[data-testid="stFileUploader"] {
-    width: 100% !important;
-}
+.block-container { padding: 0.8rem; }
 
 div[data-testid="stCameraInput"] video {
     width: 100% !important;
@@ -49,18 +37,11 @@ div[data-testid="stCameraInput"] video {
 </style>
 """, unsafe_allow_html=True)
 
-# =====================================================
-# HEADER
-# =====================================================
+# ================= HEADER =================
 st.title("🚗 Deteksi Golongan Kendaraan I–XII")
-st.caption(
-    "Sistem mendeteksi kendaraan dari kamera atau upload foto, "
-    "menentukan golongan berdasarkan PM 66/2019, dan menampilkan crop tiap kendaraan."
-)
+st.caption("Golongan IVA diperbaiki: mobil penumpang tidak lagi salah diklasifikasikan.")
 
-# =====================================================
-# LOAD YOLO
-# =====================================================
+# ================= LOAD MODEL =================
 model = YOLO("models/yolov8n.pt")
 
 CLASS_COLORS = {
@@ -71,12 +52,11 @@ CLASS_COLORS = {
     "bicycle": "orange",
 }
 
-# =====================================================
-# HELPER FUNCTIONS
-# =====================================================
+# ================= HELPERS =================
 def estimate_size(box, frame_width):
-    x1, y1, x2, y2 = box
+    x1, _, x2, _ = box
     rel = (x2 - x1) / frame_width
+
     if rel < 0.25:
         return "small"
     elif rel < 0.40:
@@ -94,9 +74,7 @@ def classify_vehicle(label, size):
                 return rule["golongan"]
     return "Tidak diketahui"
 
-# =====================================================
-# INPUT SECTION (KAMERA → UPLOAD DI BAWAH)
-# =====================================================
+# ================= INPUT =================
 st.subheader("📸 Ambil foto kendaraan")
 camera_img = st.camera_input("")
 
@@ -105,15 +83,13 @@ uploaded_img = st.file_uploader("", type=["jpg", "jpeg", "png"])
 
 image_source = camera_img if camera_img else uploaded_img
 
-# =====================================================
-# PROCESS IMAGE
-# =====================================================
+# ================= PROCESS =================
 if image_source:
     img = Image.open(image_source).convert("RGB")
-    img_np = np.array(img)
-    frame_w = img_np.shape[1]
+    np_img = np.array(img)
+    frame_w = np_img.shape[1]
 
-    results = model(img_np)[0]
+    results = model(np_img)[0]
     draw = ImageDraw.Draw(img)
 
     rows = []
@@ -125,43 +101,31 @@ if image_source:
         xyxy = box.xyxy[0].tolist()
 
         size = estimate_size(xyxy, frame_w)
-        gol = classify_vehicle(label, size)
+        golongan = classify_vehicle(label, size)
 
-        # CROP
         crop = img.crop(xyxy)
         buf = io.BytesIO()
         crop.save(buf, format="PNG")
         encoded = base64.b64encode(buf.getvalue()).decode()
 
         rows.append({
-            "Gambar Kendaraan": f'<img src="data:image/png;base64,{encoded}" width="120"/>',
+            "Gambar": f'data:image/png;base64,{encoded}',
             "Kendaraan": label,
-            "Golongan": gol,
+            "Golongan": golongan,
             "Confidence": round(conf, 3)
         })
 
-        # DRAW BOX
-        x1, y1, x2, y2 = xyxy
         color = CLASS_COLORS.get(label, "white")
+        x1, y1, x2, y2 = xyxy
         draw.rectangle([x1, y1, x2, y2], outline=color, width=5)
 
-        text = f"{label} · {gol} · {conf:.2f}"
-        tw = draw.textlength(text)
-        draw.rectangle([x1, y1 - 24, x1 + tw + 6, y1], fill=color)
-        draw.text((x1 + 3, y1 - 22), text, fill="black")
+        text = f"{label} · {golongan} · {conf:.2f}"
+        draw.rectangle([x1, y1-24, x1+len(text)*9, y1], fill=color)
+        draw.text((x1+3, y1-22), text, fill="black")
 
-    # =================================================
-    # RESULT TABLE
-    # =================================================
     st.subheader("📊 Hasil Deteksi")
-    if rows:
-        df = pd.DataFrame(rows)
-        st.write(df.to_html(escape=False), unsafe_allow_html=True)
-    else:
-        st.info("Tidak ada kendaraan terdeteksi.")
+    df = pd.DataFrame(rows)
+    st.write(df.to_html(escape=False), unsafe_allow_html=True)
 
-    # =================================================
-    # FINAL IMAGE
-    # =================================================
     st.subheader("📸 Gambar Dengan Bounding Box")
     st.image(img, use_column_width=True)
