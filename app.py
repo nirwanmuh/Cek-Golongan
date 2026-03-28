@@ -1,26 +1,68 @@
+import os
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+
 import streamlit as st
 from ultralytics import YOLO
 from PIL import Image, ImageDraw
 import numpy as np
 import pandas as pd
-import os
-os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 import base64
+import io
 
-# Import aturan golongan
 from golongan_rules import GOLONGAN_RULES
 
-st.set_page_config(page_title="Deteksi Golongan Kendaraan I–XII", layout="wide")
+# =====================================================
+# PAGE CONFIG
+# =====================================================
+st.set_page_config(
+    page_title="Deteksi Golongan Kendaraan I–XII",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
+# =====================================================
+# CUSTOM CSS (FULLSCREEN & RESPONSIVE CAMERA)
+# =====================================================
+st.markdown("""
+<style>
+.block-container {
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
+}
+
+div[data-testid="stCameraInput"],
+div[data-testid="stFileUploader"] {
+    width: 100% !important;
+}
+
+div[data-testid="stCameraInput"] video {
+    width: 100% !important;
+    border-radius: 12px;
+}
+
+@media (max-width: 768px) {
+    div[data-testid="stCameraInput"] video {
+        height: 70vh !important;
+        object-fit: cover;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =====================================================
+# HEADER
+# =====================================================
 st.title("🚗 Deteksi Golongan Kendaraan I–XII")
-st.write("Sistem mendeteksi kendaraan dari kamera atau upload foto, menentukan golongan, dan menampilkan crop tiap kendaraan.")
+st.caption(
+    "Sistem mendeteksi kendaraan dari kamera atau upload foto, "
+    "menentukan golongan berdasarkan PM 66/2019, dan menampilkan crop tiap kendaraan."
+)
 
-# ===============================
-#  Load YOLO
-# ===============================
+# =====================================================
+# LOAD YOLO
+# =====================================================
 model = YOLO("models/yolov8n.pt")
 
-# Warna per kelas YOLO
 CLASS_COLORS = {
     "car": "red",
     "motorbike": "blue",
@@ -29,14 +71,12 @@ CLASS_COLORS = {
     "bicycle": "orange",
 }
 
-# ===============================
-#  Estimate size from bounding box
-# ===============================
+# =====================================================
+# HELPER FUNCTIONS
+# =====================================================
 def estimate_size(box, frame_width):
     x1, y1, x2, y2 = box
-    w = x2 - x1
-    rel = w / frame_width
-
+    rel = (x2 - x1) / frame_width
     if rel < 0.25:
         return "small"
     elif rel < 0.40:
@@ -45,12 +85,8 @@ def estimate_size(box, frame_width):
         return "large"
     elif rel < 0.85:
         return "xlarge"
-    else:
-        return "xxlarge"
+    return "xxlarge"
 
-# ===============================
-#  Golongan classification
-# ===============================
 def classify_vehicle(label, size):
     for rule in GOLONGAN_RULES:
         if label in rule["yolo"]:
@@ -59,27 +95,18 @@ def classify_vehicle(label, size):
     return "Tidak diketahui"
 
 # =====================================================
-# INPUT: Kamera ATAU Upload Foto
+# INPUT SECTION (KAMERA → UPLOAD DI BAWAH)
 # =====================================================
+st.subheader("📸 Ambil foto kendaraan")
+camera_img = st.camera_input("")
 
-col1, col2 = st.columns(2)
+st.subheader("📤 Atau upload foto kendaraan")
+uploaded_img = st.file_uploader("", type=["jpg", "jpeg", "png"])
 
-with col1:
-    img_data = st.camera_input("Ambil foto kendaraan")
-
-with col2:
-    uploaded_file = st.file_uploader("Atau upload foto kendaraan", type=["jpg", "jpeg", "png"])
-
-# Tentukan gambar mana yang dipakai
-image_source = None
-
-if img_data:
-    image_source = img_data
-elif uploaded_file:
-    image_source = uploaded_file
+image_source = camera_img if camera_img else uploaded_img
 
 # =====================================================
-# Proses gambar jika ada input
+# PROCESS IMAGE
 # =====================================================
 if image_source:
     img = Image.open(image_source).convert("RGB")
@@ -87,67 +114,54 @@ if image_source:
     frame_w = img_np.shape[1]
 
     results = model(img_np)[0]
-
     draw = ImageDraw.Draw(img)
-    detected_rows = []
+
+    rows = []
 
     for box in results.boxes:
         cls_id = int(box.cls[0])
         label = model.model.names[cls_id]
         conf = float(box.conf[0])
-
         xyxy = box.xyxy[0].tolist()
-        x1, y1, x2, y2 = xyxy
 
-        # Tentukan ukuran + golongan
         size = estimate_size(xyxy, frame_w)
-        golongan = classify_vehicle(label, size)
+        gol = classify_vehicle(label, size)
 
-        # ---------------------
-        #  CROP KENDARAAN
-        # ---------------------
-        cropped = img.crop((x1, y1, x2, y2))
-
-        # Convert crop to PNG for HTML
+        # CROP
+        crop = img.crop(xyxy)
         buf = io.BytesIO()
-        cropped.save(buf, format="PNG")
+        crop.save(buf, format="PNG")
         encoded = base64.b64encode(buf.getvalue()).decode()
 
-        # Masukkan ke tabel
-        detected_rows.append({
-            "Gambar Kendaraan": f'<img src="data:image/png;base64,{encoded}" width="120">',
+        rows.append({
+            "Gambar Kendaraan": f'<img src="data:image/png;base64,{encoded}" width="120"/>',
             "Kendaraan": label,
-            "Golongan": golongan,
-            "Confidence": round(conf, 3),
+            "Golongan": gol,
+            "Confidence": round(conf, 3)
         })
 
-        # ---------------------
-        #  Gambar bounding box
-        # ---------------------
+        # DRAW BOX
+        x1, y1, x2, y2 = xyxy
         color = CLASS_COLORS.get(label, "white")
-
         draw.rectangle([x1, y1, x2, y2], outline=color, width=5)
 
-        text = f"{label} · {golongan} · {conf:.2f}"
+        text = f"{label} · {gol} · {conf:.2f}"
         tw = draw.textlength(text)
-        th = 22
+        draw.rectangle([x1, y1 - 24, x1 + tw + 6, y1], fill=color)
+        draw.text((x1 + 3, y1 - 22), text, fill="black")
 
-        draw.rectangle([x1, y1 - th, x1 + tw + 6, y1], fill=color)
-        draw.text((x1 + 3, y1 - th + 2), text, fill="black")
-
-    # =========================
-    # TABEL HASIL DETEKSI
-    # =========================
+    # =================================================
+    # RESULT TABLE
+    # =================================================
     st.subheader("📊 Hasil Deteksi")
-
-    if len(detected_rows) > 0:
-        df = pd.DataFrame(detected_rows)
+    if rows:
+        df = pd.DataFrame(rows)
         st.write(df.to_html(escape=False), unsafe_allow_html=True)
     else:
         st.info("Tidak ada kendaraan terdeteksi.")
 
-    # =========================
-    # GAMBAR BOUNDING BOX
-    # =========================
-    st.subheader("📸 Gambar Dengan Bounding Box:")
+    # =================================================
+    # FINAL IMAGE
+    # =================================================
+    st.subheader("📸 Gambar Dengan Bounding Box")
     st.image(img, use_column_width=True)
