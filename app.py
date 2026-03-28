@@ -3,7 +3,8 @@ from ultralytics import YOLO
 from PIL import Image, ImageDraw
 import numpy as np
 import pandas as pd
-import io
+import os
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 import base64
 
 # Import aturan golongan
